@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="utf-8"?>
+<merger version="3"><dataSet config="main"><source path="/home/wenxiang/android/ics-openvpn/remoteExample/src/main/assets"><file name="hd.conf" path="/home/wenxiang/android/ics-openvpn/remoteExample/src/main/assets/hd.conf"/></source></dataSet><dataSet config="release"><source path="/home/wenxiang/android/ics-openvpn/remoteExample/src/release/assets"/></dataSet></merger>
