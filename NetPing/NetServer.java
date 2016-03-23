@@ -11,6 +11,7 @@ import java.net.InetSocketAddress;
 import java.net.Inet4Address;
 import java.net.NetworkInterface;
 import java.net.SocketException;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Enumeration;
@@ -23,24 +24,24 @@ import java.util.TimerTask;
 
 class NetTable implements Serializable {
     private static final long serialVersionUID = 1L;
-    private String ip;
+    private String addr;
     private boolean valid;
 
-    public NetTable(String ip, boolean valid) {
-        this.ip = ip;
+    public NetTable(String addr, boolean valid) {
+        this.addr = addr;
         this.valid = valid;
     }
 
-    public String getIp() {
-        return ip;
+    public String getAddr() {
+        return addr;
     }
 
     public boolean isValid() {
         return valid;
     }
 
-    public void setIp(String ip) {
-        this.ip = ip;
+    public void setAddr(String addr) {
+        this.addr= addr;
     }
 
     public void setValid(boolean valid) {
@@ -48,17 +49,18 @@ class NetTable implements Serializable {
     }
 
     public String toString() {
-        return ip;
+        return addr;
     }
 }
 
 
 public class NetServer {
     private static int id = -1;
-    private static final int MAXNUM = 3;
+    private static int MAXNUM = 0;
     private static final int PORT = 1234;
-    private static Map<Integer,NetTable[]> netable = new HashMap<Integer,NetTable[]>();
+    private static final int TIMEOUT = 2;
     private DatagramSocket dgs = null;
+    private static Map<Integer,Map<Integer,NetTable>> netable = new HashMap<Integer,Map<Integer,NetTable>>();
 
     public long inet_aton(String strIP) throws Exception {
         byte[] bAddr = InetAddress.getByName(strIP).getAddress();
@@ -81,24 +83,29 @@ public class NetServer {
         byte[] buffer = new byte[2048];
         DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
         dgs.receive(packet);
-        System.out.println(packet.getAddress());
+        System.out.println("Packet from>> " + packet.getAddress());
         String info = new String(packet.getData(), 0, packet.getLength());
         //System.out.println("Receive: " + info);
         ByteArrayInputStream baos = new ByteArrayInputStream(buffer);
         ObjectInputStream ois = new ObjectInputStream(baos);
         try {
             @SuppressWarnings("unchecked")
-            Map<Integer,NetTable[]> map = (HashMap<Integer,NetTable[]>) ois.readObject();
-            Iterator<Map.Entry<Integer,NetTable[]>> entries = map.entrySet().iterator();
+            Map<Integer,Map<Integer,NetTable>> map = (Map<Integer,Map<Integer,NetTable>>) ois.readObject();
+            Iterator<Map.Entry<Integer,Map<Integer,NetTable>>> entries = map.entrySet().iterator();
             while (entries.hasNext()) {
-                Map.Entry<Integer,NetTable[]> entry = entries.next();
+                Map.Entry<Integer,Map<Integer,NetTable>> entry = entries.next();
                 if (!netable.containsKey(entry.getKey())) {
-                    netable.put(entry.getKey(), new NetTable[MAXNUM]);
-                }
-                for (int i=0;i<entry.getValue().length;i++) {
-                    NetTable nt = entry.getValue()[i];
-                    if (nt != null)
-                        update(entry.getKey(), i, nt.getIp());
+                    //netable.put(entry.getKey(), new NetTable[MAXNUM]);
+                    netable.put(entry.getKey(), entry.getValue());
+                } else {
+                    for (Map.Entry<Integer,NetTable> ntMap : entry.getValue().entrySet()) {
+                        update(entry.getKey(), ntMap.getKey(), ntMap.getValue().getAddr());
+                    }
+                    /*for (int i=0;i<entry.getValue().length;i++) {
+                        NetTable nt = entry.getValue()[i];
+                        if (nt != null)
+                            update(entry.getKey(), i, nt.getIp());
+                    }*/
                 }
             }
         } catch (Exception e) {
@@ -151,7 +158,6 @@ public class NetServer {
             NetworkInterface networkInterface;
             Enumeration<InetAddress> inetAddresses;
             InetAddress inetAddress;
-            String ip;
 
             while (networkInterfaces.hasMoreElements()) {
                 List<String> ipList = new ArrayList<String>();
@@ -160,7 +166,7 @@ public class NetServer {
                 while (inetAddresses.hasMoreElements()) {
                     inetAddress = inetAddresses.nextElement();
                     if (inetAddress != null && inetAddress instanceof Inet4Address) {
-                        System.out.println(Arrays.toString(inetAddress.getAddress()));
+                        //System.out.println(Arrays.toString(inetAddress.getAddress()));
                         ipList.add(inetAddress.getHostAddress());
                     }
                 }
@@ -179,22 +185,60 @@ public class NetServer {
             return;
         }
 
-        NetTable[] list = netable.get(id);
+        Map<Integer,NetTable> ntMap = netable.get(id);
+        if (ntMap != null) {
+            NetTable nt = ntMap.get(idx);
+            if (nt == null) {
+                nt = new NetTable(value, "".equals(value) ? false : true);
+            } else if (!value.equals(nt.getAddr())) {
+                // update kernel
+                nt.setAddr(value);
+            }
+        }
+
+        /*NetTable[] list = netable.get(id);
         if (list[idx] == null) {
             list[idx] = new NetTable(value, true);
         } else if (!value.equals(list[idx].getIp())) {
             // update table
             list[idx].setIp(value);
+        }*/
+    }
+
+    protected void ping() {
+        for (Map.Entry<Integer,Map<Integer,NetTable>> entries : netable.entrySet()) {
+            /*if (entries.getKey() == id) {
+                continue;
+            }*/
+
+            for (Map.Entry<Integer,NetTable> entry : entries.getValue().entrySet()) {
+                NetTable nt = entry.getValue();
+                if (!"".equals(nt.getAddr())) {
+                    boolean stat = false;
+                    try {
+                        stat = InetAddress.getByName(nt.getAddr()).isReachable(TIMEOUT);
+                        System.out.printf("Status>> %s/%s\n", nt.getAddr(), stat ? "\033[32mActive\033[0m" : "\033[31mDown\033[0m");
+                    } catch (UnknownHostException ue) {
+                        System.out.printf("unknown host: %s\n", nt.getAddr());
+                    } catch (IOException ie) {
+                    }
+
+                    if (stat != nt.isValid()) {
+                        // update kernel
+                        nt.setValid(stat);
+                    }
+                }
+            }
         }
     }
 
-    public void check(String[] names, boolean flag) {
+    public void checkLocal(String[] names, boolean flag) {
         Map<String,List<String>> net = NetServer.getIPList();
         net.remove("lo");
 
-        if (flag) {
-            for (Map.Entry<Integer,NetTable[]> entry : netable.entrySet())
-                System.out.println(entry.getKey() + ":" + Arrays.toString(entry.getValue()));
+        if (!flag) {
+            for (Map.Entry<Integer,Map<Integer,NetTable>> entry : netable.entrySet())
+                System.out.println("Network Table>> " + entry.getKey() + ":" + entry.getValue());
         }
         for (int i=0; i<names.length; i++) {
             String ip = "";
@@ -235,16 +279,23 @@ public class NetServer {
             System.exit(-1);
         }
 
-        netable.put(id, new NetTable[MAXNUM]);
         final String broadcast = args[1];
         final String[] fargs = Arrays.copyOfRange(args, 2, args.length);
-        ns.check(fargs, true);
+        MAXNUM = fargs.length;
+        Map<Integer,NetTable> nt = new HashMap<Integer,NetTable>();
+        for (int i=0;i<MAXNUM;i++) {
+            nt.put(i, new NetTable("", false));
+        }
+        netable.put(id, nt);
+        //netable.put(id, new NetTable[MAXNUM]{new NetTable("", false)});
+        ns.checkLocal(fargs, true);
         Timer timer = new Timer();
         timer.schedule(new TimerTask() {
             @Override
             public void run() {
                 ns.clientSend(broadcast);
-                ns.check(fargs, false);
+                ns.checkLocal(fargs, false);
+                ns.ping();
             }
         }, 1000, 5000);
 
